@@ -7,7 +7,7 @@ Tiny, pleasant-to-use, declarative parsing mini-library that combines a small pa
 I'm not planning on uploading `grammar` to **PyPi**, so if you want to install, run the following:
 
 ```bash
-pip install ...
+pip install git+https://github.com/samedit66/grammar.git
 ```
 
 # Example
