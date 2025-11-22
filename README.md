@@ -110,7 +110,7 @@ Declare rules with `@rule(...)` decorating methods:
 def expr_add(self, x, y): return x + y
 ```
 
-## Pattern syntax:
+### Pattern syntax
 
 `<NAME:var>` -- reference to a token or rule named NAME. If `:var` is present, that element is passed as an argument to the semantic function.
 
@@ -138,7 +138,7 @@ result = g.parse("...")           # starts at rule "top" if present, otherwise f
 result = g.parse("...", start_rule="line")  # optionally pick a start rule
 ```
 
-## How to describe multiple alternatives for the same rule
+### How to describe multiple alternatives for the same rule
 
 Two recommended ways:
 
