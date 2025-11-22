@@ -1,0 +1,22 @@
+[project]
+name = "grammar"
+version = "0.1.0"
+description = "Declarative parsing DSL for humans"
+readme = "README.md"
+authors = [
+    { name = "samedit66", email = "samedit66@yandex.ru" }
+]
+maintainers = [
+    { name = "samedit66", email = "samedit66@yandex.ru" }
+]
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.6",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.0,<0.9"]
+build-backend = "uv_build"
