@@ -17,29 +17,29 @@
 # term = factor {("*"|"/") factor};
 # factor = ident | number | "(" expression ")";
 
-from grammar import Grammar, token, rule
+from vibeparser import Grammar, token, rule
 
 
 class PL0Grammar(Grammar):
     # --- tokens (keywords first so they win over IDENT) ---
-    KW_CONST     = token(r'const', ignore_case=True)
-    KW_VAR       = token(r'var', ignore_case=True)
-    KW_PROCEDURE = token(r'procedure', ignore_case=True)
-    KW_CALL      = token(r'call', ignore_case=True)
-    KW_BEGIN     = token(r'begin', ignore_case=True)
-    KW_END       = token(r'end', ignore_case=True)
-    KW_IF        = token(r'if', ignore_case=True)
-    KW_THEN      = token(r'then', ignore_case=True)
-    KW_WHILE     = token(r'while', ignore_case=True)
-    KW_DO        = token(r'do', ignore_case=True)
-    KW_ODD       = token(r'odd', ignore_case=True)
+    KW_CONST = token(r"const", ignore_case=True)
+    KW_VAR = token(r"var", ignore_case=True)
+    KW_PROCEDURE = token(r"procedure", ignore_case=True)
+    KW_CALL = token(r"call", ignore_case=True)
+    KW_BEGIN = token(r"begin", ignore_case=True)
+    KW_END = token(r"end", ignore_case=True)
+    KW_IF = token(r"if", ignore_case=True)
+    KW_THEN = token(r"then", ignore_case=True)
+    KW_WHILE = token(r"while", ignore_case=True)
+    KW_DO = token(r"do", ignore_case=True)
+    KW_ODD = token(r"odd", ignore_case=True)
 
     # basic tokens
-    NUMBER   = token(r'\d+', int, with_word_boundaries=False)
-    IDENT    = token(r'[A-Za-z]\w*', lambda ident: ident.upper())
+    NUMBER = token(r"\d+", int, with_word_boundaries=False)
+    IDENT = token(r"[A-Za-z]\w*", lambda ident: ident.upper())
 
     # relational operators
-    RELOP    = token(r'(<=|>=|=|#|<|>)')
+    RELOP = token(r"(<=|>=|=|#|<|>)")
 
     # ------------------ consts ------------------
     # const_item := IDENT '=' NUMBER
@@ -63,7 +63,7 @@ class PL0Grammar(Grammar):
 
     # ------------------ vars ------------------
     # var_list := IDENT (',' IDENT)*
-    @rule("<IDENT:first> [',' <IDENT:next>]:rest", name="var_list")
+    @rule("<IDENT:first> [',' <IDENT>]:rest", name="var_list")
     def var_list(self, first, rest):
         return [first] + rest
 
@@ -93,31 +93,34 @@ class PL0Grammar(Grammar):
 
     # ------------------ block & program ------------------
     # block = [ const_decl ] [ var_decl ] proc_list statement
-    @rule("<const_decl:consts> <var_decl:vars> <proc_list:procs> <statement:stmt>", name="block")
+    @rule(
+        "<const_decl:consts> <var_decl:vars> <proc_list:procs> <statement:stmt>",
+        name="block",
+    )
     def block(self, consts, vars, procs, stmt):
         # consts, vars, procs are lists (possibly empty)
-        return ('BLOCK', consts or [], vars or [], procs or [], stmt)
+        return ("BLOCK", consts or [], vars or [], procs or [], stmt)
 
     @rule("<block:b> '.'", name="top")
     def top(self, b):
-        return ('PROGRAM', b)
+        return ("PROGRAM", b)
 
     # ------------------ statements ------------------
     @rule("<IDENT:name> ':=' <expression:expr>", name="statement")
     def statement_assign(self, name, expr):
-        return ('assign', name, expr)
+        return ("assign", name, expr)
 
     @rule("<KW_CALL> <IDENT:name>", name="statement")
     def statement_call(self, name):
-        return ('call', name)
+        return ("call", name)
 
     @rule("'?' <IDENT:name>", name="statement")
     def statement_input(self, name):
-        return ('read', name)
+        return ("read", name)
 
     @rule("'!' <expression:expr>", name="statement")
     def statement_output(self, expr):
-        return ('write', expr)
+        return ("write", expr)
 
     # statement sequence for begin ... end:
     # stmt_seq := statement ( ';' statement )*
@@ -131,31 +134,31 @@ class PL0Grammar(Grammar):
 
     @rule("<KW_BEGIN> <stmt_seq:stmts> <KW_END>", name="statement")
     def statement_begin(self, stmts):
-        return ('begin', stmts)
+        return ("begin", stmts)
 
     @rule("<KW_IF> <condition:c> <KW_THEN> <statement:st>", name="statement")
     def statement_if(self, c, st):
-        return ('if', c, st)
+        return ("if", c, st)
 
     @rule("<KW_WHILE> <condition:c> <KW_DO> <statement:st>", name="statement")
     def statement_while(self, c, st):
-        return ('while', c, st)
+        return ("while", c, st)
 
     # ------------------ condition ------------------
     @rule("<KW_ODD> <expression:e>", name="condition")
     def condition_odd(self, e):
-        return ('odd', e)
+        return ("odd", e)
 
     @rule("<expression:left> <RELOP:op> <expression:right>", name="condition")
     def condition_relop(self, left, op, right):
-        return ('cond', op, left, right)
+        return ("cond", op, left, right)
 
     # ------------------ expressions ------------------
-    @rule("'-' <expression:x>", name="expression", prec=30, unary='prefix')
+    @rule("'-' <expression:x>", name="expression", prec=30, unary="prefix")
     def expression_neg(self, x):
-        return ('neg', x)
+        return ("neg", x)
 
-    @rule("'+' <expression:x>", name="expression", prec=30, unary='prefix')
+    @rule("'+' <expression:x>", name="expression", prec=30, unary="prefix")
     def expression_pos(self, x):
         return x
 
@@ -165,41 +168,41 @@ class PL0Grammar(Grammar):
 
     @rule("<IDENT:v>", name="expression")
     def expression_ident(self, v):
-        return ('var', v)
+        return ("var", v)
 
     @rule("'(' <expression:e> ')'", name="expression")
     def expression_paren(self, e):
         return e
 
-    @rule("<expression:x> '*' <expression:y>", name="expression", prec=20, assoc='left')
+    @rule("<expression:x> '*' <expression:y>", name="expression", prec=20, assoc="left")
     def expression_mul(self, x, y):
-        return ('*', x, y)
+        return ("*", x, y)
 
-    @rule("<expression:x> '/' <expression:y>", name="expression", prec=20, assoc='left')
+    @rule("<expression:x> '/' <expression:y>", name="expression", prec=20, assoc="left")
     def expression_div(self, x, y):
-        return ('/', x, y)
+        return ("/", x, y)
 
-    @rule("<expression:x> '+' <expression:y>", name="expression", prec=10, assoc='left')
+    @rule("<expression:x> '+' <expression:y>", name="expression", prec=10, assoc="left")
     def expression_add(self, x, y):
-        return ('+', x, y)
+        return ("+", x, y)
 
-    @rule("<expression:x> '-' <expression:y>", name="expression", prec=10, assoc='left')
+    @rule("<expression:x> '-' <expression:y>", name="expression", prec=10, assoc="left")
     def expression_sub(self, x, y):
-        return ('-', x, y)
+        return ("-", x, y)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     g = PL0Grammar()
 
     samples = [
         """
         VAR x, squ;
-
+        
         PROCEDURE square;
         BEGIN
            squ:= x * x
         END;
-
+        
         BEGIN
            x := 1;
            WHILE x <= 10 DO
@@ -210,10 +213,9 @@ if __name__ == '__main__':
            END
         END.
         """,
-
         """
         VAR x, y, z, q, r, n, f;
-
+        
         PROCEDURE multiply;
         VAR a, b;
         BEGIN
@@ -227,7 +229,7 @@ if __name__ == '__main__':
             b := b / 2
           END
         END;
-
+        
         PROCEDURE divide;
         VAR w;
         BEGIN
@@ -246,7 +248,7 @@ if __name__ == '__main__':
             END
           END
         END;
-
+        
         PROCEDURE gcd;
         VAR f, g;
         BEGIN
@@ -259,7 +261,7 @@ if __name__ == '__main__':
           END;
           z := f
         END;
-
+        
         PROCEDURE fact;
         BEGIN
           IF n > 1 THEN
@@ -269,7 +271,7 @@ if __name__ == '__main__':
             CALL fact
           END
         END;
-
+        
         BEGIN
           ?x; ?y; CALL multiply; !z;
           ?x; ?y; CALL divide; !q; !r;

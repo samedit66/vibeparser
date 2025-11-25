@@ -1,5 +1,6 @@
 from math import prod
-from grammar import Grammar, token, rule
+from vibeparser import Grammar, token, rule
+
 
 class Calculator(Grammar):
     number = token(r"\d+", int)
@@ -40,15 +41,16 @@ class Calculator(Grammar):
     def top(self, res):
         return res
 
+
 if __name__ == "__main__":
     calc = Calculator()
     tests = [
-        "1 + 2 * 3", # 7
-        "-1 + 4", # 3
-        "2 * 3 + 4", # 10
-        "2 * (3 + 4)", # 14
-        "3! + 1", # 7
-        "5! / 5", # 24.0
+        "1 + 2 * 3",  # 7
+        "-1 + 4",  # 3
+        "2 * 3 + 4",  # 10
+        "2 * (3 + 4)",  # 14
+        "3! + 1",  # 7
+        "5! / 5",  # 24.0
     ]
     for t in tests:
         print(t, "->", calc.parse(t))

@@ -1,5 +1,5 @@
 [project]
-name = "grammar"
+name = "vibeparser"
 version = "0.1.0"
 description = "Declarative parsing DSL for humans"
 readme = "README.md"

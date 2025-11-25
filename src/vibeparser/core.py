@@ -1,6 +1,7 @@
 import re
 import ast
 import inspect
+import warnings
 from abc import ABC
 from typing import Optional, Callable, List, Tuple, Any
 
@@ -11,9 +12,18 @@ class ParseError(Exception):
 
 # ---------------- DSL spec objects ----------------
 class TokenSpec:
-    def __init__(self, pattern: str, convert: Optional[Callable[[str], Any]] = None):
+    def __init__(
+        self,
+        pattern: str,
+        convert: Optional[Callable[[str], Any]] = None,
+        ignore_case: bool = False,
+        capture_by_default: bool = False,
+    ):
         self.pattern = pattern
         self.convert = convert
+        self.ignore_case = ignore_case
+        # if True, an unnamed reference <TOKEN> will produce a capture by default
+        self.capture_by_default = capture_by_default
         self._is_token = True
 
 
@@ -22,15 +32,17 @@ def token(
     convert: Optional[Callable[[str], Any]] = None,
     with_word_boundaries: Optional[bool] = None,
     ignore_case: bool = False,
+    capture_by_default: bool = False,
 ):
     """
     Smarter token() that auto-decides word boundaries if None.
 
-    Fix: if a pattern contains letters (like 'e' in exponents) but does NOT
-    start with an alphanumeric character, do NOT add word boundaries.
-    This prevents negative-number patterns (starting with '-') from being
-    wrapped with \b which would prevent matching.
+    New argument:
+      - capture_by_default: if True, a bare <TOKEN> reference will capture
+                            its value even when not written as <TOKEN:var>.
+                            Default: False.
     """
+
     def auto_decide(pattern: str) -> bool:
         p = pattern.strip()
 
@@ -64,11 +76,11 @@ def token(
     if apply_wb:
         pattern = rf"\b{pattern}\b"
 
-    # Case-insensitive wrapping
-    if ignore_case:
-        pattern = f"(?i:{pattern})"
-
-    return TokenSpec(pattern, convert)
+    # DO NOT embed inline (?i:...) — store ignore_case in the TokenSpec instead
+    # Case-insensitive will be applied when compiling the regex.
+    return TokenSpec(
+        pattern, convert, ignore_case=ignore_case, capture_by_default=capture_by_default
+    )
 
 
 def rule(
@@ -122,11 +134,16 @@ class Grammar(ABC):
     def __init__(self, skip_whitespace: bool = True):
         self.skip_whitespace = skip_whitespace
 
-        # tokens: name -> (compiled_regex, convert)
+        # tokens: name -> (compiled_regex, convert, capture_by_default)
         self._tokens = {}
         for name, val in self.__class__.__dict__.items():
             if hasattr(val, "_is_token"):
-                self._tokens[name] = (re.compile(val.pattern), val.convert)
+                flags = re.IGNORECASE if getattr(val, "ignore_case", False) else 0
+                self._tokens[name] = (
+                    re.compile(val.pattern, flags),
+                    val.convert,
+                    getattr(val, "capture_by_default", False),
+                )
 
         # rules: name -> list of alts. Each alt is dict with parsed pattern + metadata + function
         self._rules = {}
@@ -164,6 +181,10 @@ class Grammar(ABC):
                         self._rule_order.append(rule_name)
                     self._rules[rule_name].append(alt)
 
+        # Ensure empty-alternative alts are tried last (prevents zero-length seeds stealing precedence)
+        for _rname, _alts in self._rules.items():
+            _alts.sort(key=lambda a: 1 if not a.get("elems") else 0)
+
     # new pattern parser: supports:
     #  - <name:var> or <name?:var> (optional)
     #  - <name*:var> and <name+:var> (star/plus quantifiers inside angle brackets)
@@ -193,7 +214,7 @@ class Grammar(ABC):
                     i += 1
                     continue
                 if not in_sq and not in_dq:
-                    if s[i:i+3] == "::=":
+                    if s[i : i + 3] == "::=":
                         return i
                 i += 1
             return -1
@@ -203,7 +224,7 @@ class Grammar(ABC):
         rhs = s
         if assign_idx != -1:
             lhs = s[:assign_idx].strip()
-            rhs = s[assign_idx+3:].strip()
+            rhs = s[assign_idx + 3 :].strip()
             # if lhs is like "<expr>" extract expr, otherwise if plain word, use it
             if lhs.startswith("<") and lhs.endswith(">"):
                 inner = lhs[1:-1].strip()
@@ -245,10 +266,36 @@ class Grammar(ABC):
                         p = skip_spaces(p)
                         m = ident_re.match(s, p)
                         if not m:
-                            raise ValueError(f"Expected identifier after ':' in pattern: {pattern}")
+                            raise ValueError(
+                                f"Expected identifier after ':' in pattern: {pattern}"
+                            )
                         var = m.group(0)
                         p = m.end()
-                    elems.append(("group", kind, inner_elems, var))
+
+                    # --- group sugar normalization ---
+                    # If the user wrote a tail of the common form: [ SEP ITEM ]:name
+                    # (where SEP is a literal or unnamed token and ITEM is a named ref),
+                    # rewrite the group into a 'group_sugar' node that during matching
+                    # only captures the ITEM values (ignoring separators).
+                    group_node = ("group", kind, inner_elems, var)
+                    if var is not None and len(inner_elems) == 2:
+                        first, second = inner_elems[0], inner_elems[1]
+                        # second must be a ref and should be capturable (named var or token with capture_by_default)
+                        if second[0] == "ref":
+                            sec_name, sec_var = second[1], second[2]
+                            token_info = None
+                            if sec_name in getattr(self, "_tokens", {}):
+                                token_info = self._tokens[sec_name]
+                            sec_capturable = (sec_var is not None) or (
+                                token_info is not None and token_info[2]
+                            )
+                            first_is_sep = (first[0] == "lit") or (
+                                first[0] == "ref" and first[2] is None
+                            )
+                            if sec_capturable and first_is_sep:
+                                # Make sugar node: ('group_sugar', kind, sep_elem, item_elem, var)
+                                group_node = ("group_sugar", kind, first, second, var)
+                    elems.append(group_node)
                     p = skip_spaces(p)
                     continue
                 elif c == "<":
@@ -271,7 +318,9 @@ class Grammar(ABC):
                         content,
                     )
                     if not m:
-                        raise ValueError(f"Invalid <...> content: '{content}' in pattern: {pattern}")
+                        raise ValueError(
+                            f"Invalid <...> content: '{content}' in pattern: {pattern}"
+                        )
                     name = m.group(1)
                     quant_sym = m.group(2) or ""
                     varpart = m.group(3)
@@ -297,7 +346,9 @@ class Grammar(ABC):
                                 default = ast.literal_eval(ds)
                             except Exception:
                                 # strip quotes if any or keep raw
-                                if (ds.startswith("'") and ds.endswith("'")) or (ds.startswith('"') and ds.endswith('"')):
+                                if (ds.startswith("'") and ds.endswith("'")) or (
+                                    ds.startswith('"') and ds.endswith('"')
+                                ):
                                     default = ds[1:-1]
                                 else:
                                     default = ds
@@ -315,7 +366,7 @@ class Grammar(ABC):
                     if quote == "'":
                         # SQL-style doubling: '' -> single quote inside literal
                         while end < n:
-                            if s[end] == "'" :
+                            if s[end] == "'":
                                 # if doubled single quote -> append one and advance by 2
                                 if end + 1 < n and s[end + 1] == "'":
                                     lit_chars.append("'")
@@ -332,7 +383,9 @@ class Grammar(ABC):
                                 lit_chars.append(s[end])
                                 end += 1
                         else:
-                            raise ValueError(f"Unclosed string literal in pattern: {pattern}")
+                            raise ValueError(
+                                f"Unclosed string literal in pattern: {pattern}"
+                            )
                     else:
                         # double-quoted: allow backslash escapes
                         while end < n:
@@ -346,25 +399,76 @@ class Grammar(ABC):
                                 lit_chars.append(s[end])
                                 end += 1
                         else:
-                            raise ValueError(f"Unclosed string literal in pattern: {pattern}")
+                            raise ValueError(
+                                f"Unclosed string literal in pattern: {pattern}"
+                            )
                     lit = "".join(lit_chars)
                     elems.append(("lit", lit))
                     p = skip_spaces(end)
                     continue
                 else:
+                    # bare token/literal chunk (e.g. commas or other punctuation)
                     m = re.match(r"[^<>\[\]\{\}\s]+", s[p:])
                     if not m:
-                        raise ValueError(f"Unexpected char '{s[p]}' in pattern: {pattern}")
+                        raise ValueError(
+                            f"Unexpected char '{s[p]}' in pattern: {pattern}"
+                        )
                     tok = m.group(0)
                     elems.append(("lit", tok))
                     p += len(tok)
                     p = skip_spaces(p)
                     continue
             if stop_char:
-                raise ValueError(f"Unclosed group in pattern: {pattern} (expected '{stop_char}')")
+                raise ValueError(
+                    f"Unclosed group in pattern: {pattern} (expected '{stop_char}')"
+                )
             return elems, p
 
         elems, _ = parse_sequence(0, stop_char=None)
+
+        # --- Pattern linter/warnings ---
+        # Warn if a named group may capture anonymous token values (likely a mistake).
+        def walk_and_warn(items, in_group_named=False):
+            for e in items:
+                if e[0] == "group" or e[0] == "group_sugar":
+                    # group node: ('group', kind, inner_elems, var) or sugar variant
+                    varname = e[3] if e[0] == "group" else e[4]
+                    inner = e[2] if e[0] == "group" else e[3]
+                    if varname is not None:
+                        # Warn if any inner element is a token ref with capture_by_default True and is unnamed
+                        for ie in inner:
+                            if ie[0] == "ref":
+                                refname = ie[1]
+                                refvar = ie[2]
+                                if refvar is None and refname in getattr(
+                                    self, "_tokens", {}
+                                ):
+                                    tokinfo = self._tokens[refname]
+                                    if tokinfo[2]:
+                                        warnings.warn(
+                                            f"Pattern '{pattern}': group ':{varname}' contains unnamed token <{refname}> which has capture_by_default=True — this may capture punctuation tokens unexpectedly.",
+                                            UserWarning,
+                                        )
+                                # NEW: warn if the inner ref itself has a named capture — nested named captures
+                                if refvar is not None:
+                                    warnings.warn(
+                                        f"Pattern '{pattern}': group ':{varname}' contains an inner named capture '<{refname}:{refvar}>' — nested named captures inside a group can cause parsing to fail. Consider removing the inner ':name' or the group's name.",
+                                        UserWarning,
+                                    )
+                    walk_and_warn(inner, in_group_named=(varname is not None))
+                elif e[0] == "ref":
+                    # nothing else to do here
+                    continue
+                else:
+                    # lit etc
+                    continue
+
+        try:
+            walk_and_warn(elems)
+        except Exception:
+            # linter should never fail the parse; if it does, ignore
+            pass
+
         return lhs_name, elems
 
     # location helpers kept same
@@ -393,7 +497,7 @@ class Grammar(ABC):
         exp_part = f"\nExpected: {', '.join(expected)}" if expected else ""
         # small lookahead to show what token or chars were actually found
         lookahead_len = 20
-        found = text[pos: pos+lookahead_len]
+        found = text[pos : pos + lookahead_len]
         # trim whitespace in found for clarity
         found_disp = found.replace("\n", "\\n")
         found_part = f"\nFound: '{found_disp}'" if found_disp else ""
@@ -404,18 +508,25 @@ class Grammar(ABC):
     # public parse entrypoint kept same, but we initialize memo cache per-parse
     def parse(self, text: str, start_rule: Optional[str] = None):
         if start_rule is None:
-            start_rule = (
-                "top"
-                if "top" in self._rules
-                else (self._rule_order[0] if self._rule_order else None)
-            )
-        if start_rule is None:
-            raise RuntimeError("No rules defined")
+            # Require an explicit 'top' rule in every grammar
+            if "top" not in self._rules:
+                raise RuntimeError(
+                    "Grammar must define a 'top' rule as the required start symbol"
+                )
+            start_rule = "top"
 
         # memoization cache: key -> (value, pos) or 'INPROG'
         self._memo = {}
 
-        val, pos = self._match_rule(start_rule, text, 0, min_prec=0)
+        # Skip initial whitespace so parsing starts at the first real token.
+        start_pos = 0
+        if self.skip_whitespace:
+            while start_pos < len(text) and text[start_pos].isspace():
+                start_pos += 1
+
+        val, pos = self._match_rule(start_rule, text, start_pos, min_prec=0)
+
+        # Allow trailing whitespace after successful parse.
         if self.skip_whitespace:
             while pos < len(text) and text[pos].isspace():
                 pos += 1
@@ -487,7 +598,7 @@ class Grammar(ABC):
                 return f"'{e[1]}'"
             if e[0] == "ref":
                 return f"<{e[1]}>"
-            if e[0] == "group":
+            if e[0] == "group" or e[0] == "group_sugar":
                 return "group"
             return "item"
 
@@ -501,11 +612,16 @@ class Grammar(ABC):
                 else:
                     expected.append(lit)
                     return None
+
             elif typ == "ref":
                 name, var, quant, default = elem[1], elem[2], elem[3], elem[4]
                 # token
                 if name in self._tokens:
-                    regex, convert = self._tokens[name]
+                    regex, convert, tok_capture_by_default = self._tokens[name]
+                    # For tokens, we only capture when:
+                    #  - the ref has an explicit :var, OR
+                    #  - the token has capture_by_default True
+                    # We do NOT treat capture_anon as applying to tokens.
                     m = regex.match(text, cur)
                     if not m:
                         if quant == "optional":
@@ -513,9 +629,8 @@ class Grammar(ABC):
                                 # use default if provided, else None
                                 val = default if default is not None else None
                                 return ([val], cur)
-                            elif capture_anon:
-                                return ([None], cur)
                             else:
+                                # token optional without var -> no capture, return same pos
                                 return ([], cur)
                         # quant '*' (star) or '+' handled below with repetition loops
                         if quant in ("star", "plus"):
@@ -532,8 +647,6 @@ class Grammar(ABC):
                                     # star, zero occurrences
                                     if var:
                                         return ([[]], curpos)
-                                    elif capture_anon:
-                                        return ([[]], curpos)
                                     else:
                                         return ([], curpos)
                             # else loop
@@ -547,9 +660,7 @@ class Grammar(ABC):
                                 # avoid infinite loops if zero-length matches
                                 if curpos == m2.start():
                                     break
-                            if var:
-                                return ([items], curpos)
-                            elif capture_anon:
+                            if var or tok_capture_by_default:
                                 return ([items], curpos)
                             else:
                                 return ([], curpos)
@@ -571,18 +682,15 @@ class Grammar(ABC):
                             items.append(convert(raw2) if convert else raw2)
                             if curpos == m2.start():
                                 break
-                        if var:
-                            return ([items], curpos)
-                        elif capture_anon:
+                        if var or tok_capture_by_default:
                             return ([items], curpos)
                         else:
                             return ([], curpos)
                     # optional handled earlier
-                    if var:
-                        return ([val], newcur)
-                    elif capture_anon:
+                    if var or tok_capture_by_default:
                         return ([val], newcur)
                     else:
+                        # token matched but not requested to capture -> do not capture
                         return ([], newcur)
                 else:
                     # rule reference
@@ -593,7 +701,9 @@ class Grammar(ABC):
                         first_attempt = True
                         while True:
                             try:
-                                val, new_pos = self._match_rule(name, text, curpos, min_prec=0)
+                                val, new_pos = self._match_rule(
+                                    name, text, curpos, min_prec=0
+                                )
                             except ParseError:
                                 val = None
                                 new_pos = None
@@ -634,6 +744,61 @@ class Grammar(ABC):
                         return ([val], new_pos)
                     else:
                         return ([], new_pos)
+
+            elif typ == "group_sugar":
+                # sugar node: ('group_sugar', kind, sep_elem, item_elem, var)
+                kind, sep_elem, item_elem, varname = elem[1], elem[2], elem[3], elem[4]
+                items = []
+                curpos = cur
+
+                def match_once(p):
+                    # first match sep, then item
+                    # sep shouldn't be captured — pass capture_anon=False
+                    res1 = match_element(sep_elem, p, capture_anon=False)
+                    if res1 is None:
+                        return None
+                    _, pos_after_sep = res1
+                    res2 = match_element(item_elem, pos_after_sep, capture_anon=False)
+                    if res2 is None:
+                        return None
+                    item_caps, newp = res2
+                    # normalize item value
+                    if len(item_caps) == 0:
+                        item = None
+                    elif len(item_caps) == 1:
+                        item = item_caps[0]
+                    else:
+                        item = tuple(item_caps)
+                    return item, newp
+
+                first_match = match_once(curpos)
+                if kind == "plus":
+                    if first_match is None:
+                        if sep_elem:
+                            expected.append(f"one or more {elem_desc(sep_elem)}")
+                        else:
+                            expected.append("one or more (group)")
+                        return None
+                    item, curpos = first_match
+                    items.append(item)
+                    while True:
+                        nxt = match_once(curpos)
+                        if nxt is None:
+                            break
+                        item, curpos = nxt
+                        items.append(item)
+                else:  # star
+                    while True:
+                        nxt = match_once(curpos)
+                        if nxt is None:
+                            break
+                        item, curpos = nxt
+                        items.append(item)
+                if varname:
+                    return ([items], curpos)
+                else:
+                    return ([], curpos)
+
             elif typ == "group":
                 kind, inner_elems, var = elem[1], elem[2], elem[3]
                 items = []
@@ -641,10 +806,22 @@ class Grammar(ABC):
 
                 # helper to attempt one iteration of the inner sequence
                 def match_once(p):
-                    res = match_sequence(inner_elems, p, capture_anon=capture_anon)
+                    # If this group itself has a capture name (var), then we enable
+                    # anonymous capture inside so that unnamed rule refs inside become captures.
+                    inner_capture_anon = capture_anon or (var is not None)
+
+                    res = match_sequence(
+                        inner_elems, p, capture_anon=inner_capture_anon
+                    )
                     if res is None:
                         return None
                     inner_caps, newp = res
+
+                    # prevent zero-length inner matches (would cause infinite loops)
+                    if newp == p:
+                        return None
+
+                    # Convert inner captures into a sensible item:
                     if len(inner_caps) == 0:
                         item = None
                     elif len(inner_caps) == 1:
@@ -700,7 +877,9 @@ class Grammar(ABC):
                     raise
                 except Exception as e:
                     raise self._format_error(
-                        f"Error in transform for rule '{rule_name}': {e}", text, start_pos
+                        f"Error in transform for rule '{rule_name}': {e}",
+                        text,
+                        start_pos,
                     )
                 # None means treat as alt not matching
                 if transformed is None:
@@ -718,7 +897,9 @@ class Grammar(ABC):
                     raise
                 except Exception as e:
                     raise self._format_error(
-                        f"Error in validate for rule '{rule_name}': {e}", text, start_pos
+                        f"Error in validate for rule '{rule_name}': {e}",
+                        text,
+                        start_pos,
                     )
                 if not ok:
                     # treat as no match
@@ -731,9 +912,19 @@ class Grammar(ABC):
                 # (excluding self for bound methods), supply only the first N args.
                 params = list(sig.parameters.values())
                 # bound method: first parameter is usually 'self' -> omit it
-                if params and params[0].name == 'self':
+                if params and params[0].name == "self":
                     params = params[1:]
-                expected_param_count = len([p for p in params if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)])
+                expected_param_count = len(
+                    [
+                        p
+                        for p in params
+                        if p.kind
+                        in (
+                            inspect.Parameter.POSITIONAL_ONLY,
+                            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        )
+                    ]
+                )
                 if expected_param_count != 0:
                     call_args = args_for_call[:expected_param_count]
                 else:
@@ -755,7 +946,9 @@ class Grammar(ABC):
                 if self.skip_whitespace:
                     while cur < len(text) and text[cur].isspace():
                         cur += 1
-                res = match_element(elem, cur, capture_anon=alt.get("capture_anon", False))
+                res = match_element(
+                    elem, cur, capture_anon=alt.get("capture_anon", False)
+                )
                 if res is None:
                     return None
                 elem_caps, new_pos = res
@@ -798,7 +991,9 @@ class Grammar(ABC):
                     elif alt.get("capture_anon", False):
                         args.append(inner)
                 else:
-                    res = match_element(elem, cur, capture_anon=alt.get("capture_anon", False))
+                    res = match_element(
+                        elem, cur, capture_anon=alt.get("capture_anon", False)
+                    )
                     if res is None:
                         ok = False
                         break
@@ -811,9 +1006,11 @@ class Grammar(ABC):
                     seeds.append((alt, sem_val, cur))
                 # else transform/validate rejected alt -> not a seed
 
-        # 2) Try non-left alternatives as seeds (in order)
+        # 2) Try non-left alternatives as seeds (prefer non-empty alts first)
         if not seeds:
-            for alt in non_left:
+            # prefer alts that actually consume something (elems != [])
+            sorted_non_left = sorted(non_left, key=lambda a: 0 if a["elems"] else 1)
+            for alt in sorted_non_left:
                 res = try_match_alt(alt, pos)
                 if res is not None:
                     val, newpos = res
@@ -852,7 +1049,9 @@ class Grammar(ABC):
                     if self.skip_whitespace:
                         while cur < len(text) and text[cur].isspace():
                             cur += 1
-                    res = match_element(elem, cur, capture_anon=alt.get("capture_anon", False))
+                    res = match_element(
+                        elem, cur, capture_anon=alt.get("capture_anon", False)
+                    )
                     if res is None:
                         ok = False
                         break
@@ -892,7 +1091,9 @@ class Grammar(ABC):
                     if elem[0] == "ref" and elem[1] == rule_name:
                         rhs_min = p if assoc == "right" else (p + 1)
                         try:
-                            val, new_pos = self._match_rule(elem[1], text, cur, min_prec=rhs_min)
+                            val, new_pos = self._match_rule(
+                                elem[1], text, cur, min_prec=rhs_min
+                            )
                         except ParseError:
                             ok = False
                             break
@@ -902,7 +1103,9 @@ class Grammar(ABC):
                         elif alt.get("capture_anon", False):
                             args.append(val)
                     else:
-                        res = match_element(elem, cur, capture_anon=alt.get("capture_anon", False))
+                        res = match_element(
+                            elem, cur, capture_anon=alt.get("capture_anon", False)
+                        )
                         if res is None:
                             ok = False
                             break
@@ -931,4 +1134,3 @@ class Grammar(ABC):
             self._memo[key] = (left_val, curpos)
 
         return left_val, curpos
-    

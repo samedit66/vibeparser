@@ -1,4 +1,4 @@
-from grammar import Grammar, token, rule
+from vibeparser import Grammar, token, rule
 
 
 # --- TinyBASIC grammar ----

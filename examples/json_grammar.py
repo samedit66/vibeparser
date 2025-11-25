@@ -1,6 +1,7 @@
 # json_grammar.py
 import ast
-from grammar import Grammar, token, rule
+from vibeparser import Grammar, token, rule
+
 
 # helpers for token conversion
 def _json_string_unescape(s: str):
@@ -13,6 +14,7 @@ def _json_string_unescape(s: str):
             return s[1:-1]
         return s
 
+
 def _json_number_conv(s: str):
     if "." in s or "e" in s or "E" in s:
         return float(s)
@@ -20,6 +22,7 @@ def _json_number_conv(s: str):
         return int(s)
     except Exception:
         return float(s)
+
 
 class JSONGrammar(Grammar):
     # Tokens
@@ -95,7 +98,7 @@ class JSONGrammar(Grammar):
     @rule("<LBRACK> <value:first> [ <COMMA> <value:v> ]:rest <RBRACK>", name="array")
     def array_nonempty(self, first, rest):
         return [first] + rest
-    
+
     # top rule: allow top-level whitespace trimmed by Grammar.parse
     @rule("<value:res>")
     def top(self, res):
@@ -106,26 +109,26 @@ if __name__ == "__main__":
     jg = JSONGrammar()
 
     tests = [
-        'null',
-        'true',
-        'false',
+        "null",
+        "true",
+        "false",
         '"hello"',
         '"esc\\\\nline"',
-        '123',
-        '-12.34e+2',
-        '[]',
-        '[1, 2, 3]',
+        "123",
+        "-12.34e+2",
+        "[]",
+        "[1, 2, 3]",
         '[ "a", null, true, 3.14 ]',
-        '{}',
+        "{}",
         '{"a": 1, "b": [true, false], "c": {"x": "y"}}',
-        '''
+        """
         {
           "name": "Alice",
           "age": 30,
           "tags": ["dev", "py"],
           "prefs": {"dark": true}
         }
-        ''',
+        """,
     ]
 
     for t in tests:

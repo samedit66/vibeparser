@@ -1,49 +1,41 @@
-# grammar - tiny parsing DSL
+# vibeparser 😎🤙🏻🔥
 
-A small, pleasant-to-use declarative parsing mini-library with a compact pattern DSL, per-alternative precedence, limited left-recursive operator support, and convenient repetition/quantifier syntax. Intended for small DSLs, examples, and teaching - not a production-grade parser generator.
+A tiny, pleasant-to-use **declarative** parsing mini-library with a compact pattern DSL, per-alternative precedence, limited left-recursive operator support, and convenient repetition/quantifier syntax.
+Goal: make it easy and pleasant to write small grammars in Python using a compact pattern DSL combined with Python semantic functions.
+Best for: education, experiments, quick prototypes, parsers for small config languages, calculators, tiny DSLs.
 
----
-
-## Features
-
-A tiny parser you actually want to write grammars in - readable, pragmatic, and a little clever.
-
-- **Rule names inside patterns (`::=`).** You can now specify the rule name on the left-hand side of a pattern: `"<expr> ::= <expr:left> '+' <expr:right>"`. When present this rule-name **takes precedence** over the `name=` decorator argument and over the function-name heuristic used previously.
-- **Anonymous (positional) captures.** Use `capture_anon=True` on `@rule(...)` to request that references *without* explicit `:var` names be captured and passed to the semantic action in positional order. This makes short rules like `@rule("<assignment> ::= <varname> '=' <expr>", capture_anon=True)` work with `def assignment(self, x1, x2)` as you expected.
-- **Robust literal quoting & escaping.** Literals inside single or double quotes are first-class and can contain spaces and punctuation. Single-quoted literals use SQL-style doubling for an embedded single quote: `'''` (actually `''`) becomes `'` in the literal value; double-quoted literals support backslash escapes. This makes operators like `'<`' and `'>'` safe as literals inside patterns.
-- **Named captures first-class.** If you specify `<NAME:var>` it continues to be the canonical way to capture a submatch; anonymous capturing is opt-in and does not change existing behavior unless you enable it.
-- **Smarter tokens.** `token()` auto-decides word boundaries but with improved heuristics so operators and numeric/exponent forms aren't accidentally wrapped with `\b` when that would break matching.
-- **Transform / validate hooks.** `@rule(..., transform=..., validate=...)` lets you normalize, post-process, or reject an alternative before the semantic action runs. Returning `None` from `transform` or `False` from `validate` makes the alternative behave as if it didn't match.
-- **Improved error diagnostics.** Parse errors include line/column, a code snippet and caret, *and* a short lookahead showing what the parser actually found; expected hints for failed group/quantifier matches are more informative.
-- **Left-recursive operator support.** Per-alternative `prec` and `assoc` are supported as before, plus prefix/postfix unary forms.
-- **Conservative memoization.** A per-parse memo cache speeds repeated work while preserving the left-recursive growth algorithm semantics.
-
+> [!WARNING]
+> **This library was entirely written by an LLM.** It *appears* to work and the examples run in my tests, but treat it as experimental research/learning code — not something to deploy in production. Use at your own risk; if it eats your grammar, try again with coffee ☕. (Also: it may be charmingly verbose about errors.)
 
 ---
 
-# Installation
+## Installation
 
-I'm not planning on uploading `grammar` to **PyPi**, so if you want to install, run the following:
+I'm not planning on uploading **vibeparser** to PyPi, so if you want to install, run the following:
 
 ```bash
-pip install git+https://github.com/samedit66/grammar.git
+pip install git+https://github.com/samedit66/vibeparser.git
 ```
 
 ---
 
-## Quick example - calculator
+## Quick example — calculator
 
 ```py
 from math import prod
-from grammar import Grammar, token, rule
+from vibeparser import Grammar, token, rule
 
 class Calculator(Grammar):
+    # token: numbers will be captured and converted to int
     number = token(r"\d+", int)
 
+    # postfix factorial: high precedence (unary postfix)
     @rule("<expr:x> '!'", prec=40, unary="postfix")
-    def expr_postfix_inc(self, x):
-        return prod(range(1, x + 1))
+    def expr_postfix_fact(self, x):
+        # x is the evaluated expression to the left (an int)
+        return prod(range(1, int(x) + 1))
 
+    # additive operators (left-assoc)
     @rule("<expr:x> '+' <expr:y>", prec=10, assoc="left")
     def expr_add(self, x, y):
         return x + y
@@ -52,6 +44,7 @@ class Calculator(Grammar):
     def expr_sub(self, x, y):
         return x - y
 
+    # multiplicative operators (higher precedence)
     @rule("<expr:x> '*' <expr:y>", prec=20, assoc="left")
     def expr_mul(self, x, y):
         return x * y
@@ -60,10 +53,12 @@ class Calculator(Grammar):
     def expr_div(self, x, y):
         return x / y
 
+    # unary prefix minus
     @rule("'-' <expr:x>", prec=30, unary="prefix")
     def expr_neg(self, x):
         return -x
 
+    # numbers and parentheses
     @rule("<number:n>")
     def expr_number(self, n):
         return n
@@ -72,6 +67,7 @@ class Calculator(Grammar):
     def expr_paren(self, val):
         return val
 
+    # top rule — entry point
     @rule("<expr:res>")
     def top(self, res):
         return res
@@ -79,12 +75,12 @@ class Calculator(Grammar):
 if __name__ == "__main__":
     calc = Calculator()
     tests = [
-        "1 + 2 * 3", # 7
-        "-1 + 4", # 3
-        "2 * 3 + 4", # 10
-        "2 * (3 + 4)", # 14
-        "3! + 1", # 7
-        "5! / 5", # 24.0
+        "1 + 2 * 3",    # 7
+        "-1 + 4",       # 3
+        "2 * 3 + 4",    # 10
+        "2 * (3 + 4)",  # 14
+        "3! + 1",       # 7
+        "5! / 5",       # 24.0
     ]
     for t in tests:
         print(t, "->", calc.parse(t))
@@ -94,71 +90,123 @@ See [examples](./examples) folder for other grammars like [JSON](./examples/json
 
 ---
 
-## Pattern syntax
+## Features 💎
 
-- `'<lit>'` or `"<lit>"` — literal text. Spaces, punctuation and operators are allowed in literals. Single-quoted literals use **doubling** to include a single quote inside (e.g. `"hello ''world''!"` → `hello 'world'!`). Double-quoted strings support backslash escapes.
-- `<NAME:var>` — reference to a token or rule `NAME`; when `:var` is present the matched value is passed as an argument to the semantic function.
-- `<NAME?:var>` — optional reference; if missing and `:var` provided the var receives `None` (or a `DEFAULT` if specified).
-- `<NAME?:var=DEFAULT>` — optional with default value; `DEFAULT` is parsed with Python literal rules when possible (numbers, quoted strings) — otherwise treated as raw string.
-- `<NAME*:xs>` — zero-or-more repetition of a **single** reference; when named yields a `list` (possibly empty).
-- `<NAME+:xs>` — one-or-more repetition of a single reference; named capture yields a non-empty `list`.
-- `[ ... ]:name` — group repetition (zero-or-more): the inner sequence is attempted repeatedly; if `:name` provided you get a `list` of items where each item is either a single value (if the inner sequence captured one thing) or a `tuple` of captures.
-- `{ ... }:name` — group repetition (one-or-more): fails if zero occurrences were found.
-- **Rule name on the left-hand side:** patterns may now include an explicit rule name before `::=`. Example: `"<expr> ::= <expr:left> '+' <expr:right>"`. This left-hand name, when present, overrides a `name=` kwarg passed to `@rule()` and the function-name-based fallback.
-- **Anonymous captures:** If you set `capture_anon=True` in the `@rule` decorator, submatches that do not have an explicit `:var` will be captured and passed to the semantic action in positional order. This applies also to repetitions and groups (you will receive lists/tuples accordingly).
+This section describes what makes vibeparser enjoyable and useful.
 
-Examples:
-
-- `@rule("<expr:x> [',' <expr:y>]:rest")` → `x` is first `expr`, `rest` is a list of following exprs.
-- `@rule("<id?:name='anon'>")` → `name` will be the matched id, or `'anon'` if missing.
-- `@rule("<num*:ns>")` → `ns` becomes a list of numbers (maybe empty).
-- `@rule("<assignment> ::= <varname> '=' <expr>", capture_anon=True)` → function `def assignment(self, x1, x2)` receives `x1=varname`, `x2=expr`.
-
----
-
-## `token()` and word-boundary heuristics
-
-`token(pattern, convert=None, with_word_boundaries=None, ignore_case=False)` defines a lexical token. When `with_word_boundaries` is not supplied the library attempts to automatically decide whether to wrap the regex with `\b...\b`.
-
-The heuristics were improved so that patterns which contain letters but do **not** start with an alphanumeric character (for example, a numeric token beginning with `-` that contains `e` for exponent) **are not** wrapped with `\b` - this prevents spurious mismatches like `-12.34e+2` failing to match.
-
-If you want to force `\b` behavior, pass `with_word_boundaries=True` explicitly.
+- **Compact pattern DSL.** Write patterns inside the `@rule(...)` decorator using a readable, small syntax for literals, references, groups and quantifiers.
+- **Rule name on the left (`::=`).** A pattern may start with an explicit left-hand rule name: `"<expr> ::= <expr:left> '+' <expr:right>"`. When present this name overrides the decorator `name=` and function-name heuristics.
+- **Flexible captures.** Use `<NAME:var>` to capture and name a submatch. Optional references (`?`), zero-or-more (`*`) and one-or-more (`+`) quantifiers inside `<...>` are supported, and default values for optional refs are supported: `<id?:name='anon'>`.
+- **Anonymous (positional) captures.** `@rule(..., capture_anon=True)` causes submatches without explicit `:var` to be captured and passed positionally to your semantic action (handy for short rules and operator forms).
+- **Transform & validate hooks.** `@rule(..., transform=..., validate=...)` lets you normalize or reject an alternative *before* calling the semantic function. Returning `None` from `transform` or `False` from `validate` makes the alt behave as if it didn't match.
+- **Smart tokens.** `token(pattern, ...)` auto-decides whether to wrap a token with `\b...\b` using heuristics that avoid breaking punctuation or exponent-number forms. New `capture_by_default` supports tokens that capture even when referenced without `:var`.
+- **Group sugar for separators.** A common pattern like `[',' <expr>] :rest` is treated intelligently: the separator is ignored in group captures and you get a convenient list of captured items (no manual filtering required).
+- **Prefix/postfix unary forms.** Define unary operators by marking an alternative with `unary='prefix'` or `unary='postfix'` so the engine treats them correctly when mixing with binary operators.
+- **Per-alternative precedence and associativity.** `prec=` and `assoc=` (left/right) can be provided per alternative to express operator precedence cleanly.
+- **Limited left-recursive operator support.** The engine supports left-recursive growth with guarded memoization and per-alternative precedence. This enables natural expression grammars like `expr + expr * expr` while avoiding infinite recursion.
+- **Conservative memoization (per-parse).** A memo cache keyed on `(rule_name, pos, min_prec)` speeds repeated work but preserves left-recursion semantics.
+- **Linter warnings.** The pattern parser detects likely mistakes (e.g. named group capturing unnamed tokens with `capture_by_default=True`, nested named captures inside groups, unclosed groups) and emits `UserWarning`s to help you find fragile patterns.
+- **Improved error messages.** `ParseError` includes line/column, a snippet with caret, and a short `Found: '...'` lookahead and `Expected:` hints.
+- **Robust literal quoting.** Single-quoted literals use SQL-style doubling for embedded single quotes (`''` → `'`). Double-quoted literals accept backslash escapes.
+- **Default values in references.** Optional references can specify a default value (Python literal syntax attempted), e.g. `<NAME?:v=42>`.
+- **Group repetition capture semantics.** `[ ... ]:name` (zero-or-more) and `{ ... }:name` (one-or-more) produce lists of items where each item is either a single capture or a tuple of captures depending on what the inner sequence produced.
 
 ---
 
-## `@rule` options: `transform` and `validate`
+## Pattern syntax (complete summary)
 
-You can now pass two convenient hooks to `@rule`:
+Use the compact pattern language inside `@rule("...")` strings.
 
-- `transform: Callable[[List[Any]], Any]` - receives the *raw captured argument list* and should return either:
-  - an iterable (list/tuple) which will be used as the argument list for the semantic function; or
-  - a single value (it will be passed as one argument); or
-  - `None` to indicate this alternative should be treated as NOT matched.
+- **Literals**: `'...'` or `"..."` — literal text. Single-quoted literals use SQL-style doubling for `'` inside the literal: `'''` becomes `'` in the value. Double-quoted literals accept backslash escapes (`\n`, `\\`, `\'`, `\"`, etc.). Literals may include spaces and punctuation.
 
-- `validate: Callable[[List[Any]], bool]` - receives the raw captured args and returns `True` to accept or `False` to reject this alternative (rejection behaves like no match).
+- **References**: `<NAME:var>` — reference to a token or rule `NAME`. When `:var` is present the matched value is passed to the semantic function as that positional argument.
 
-- `capture_anon: bool` — when `True`, submatches without explicit `:var` names are captured and supplied positionally to the semantic action. Use this when you prefer short patterns and positional args in your semantic functions.
+- **Optional**: `<NAME?:var>` — optional reference. If missing and `:var` provided the variable receives `None` (or the default value if specified). You can also write `<NAME?:var=DEFAULT>` where `DEFAULT` is attempted to be parsed as a Python literal.
 
-These hooks allow you to do lightweight checks and normalization right next to the grammar instead of inside semantic actions.
+- **Repetition inside refs**: `<NAME*:xs>` — zero-or-more occurrences of a single reference. Named capture yields a list (possibly empty). `<NAME+:xs>` — one-or-more occurrences; named capture yields a non-empty list.
 
-Example:
+- **Groups (sequence repetition)**:
+  - `[ ... ]:name` — zero-or-more repetition of the inner sequence; if `:name` is present you receive a list where each item is either a single value or a tuple of values depending on the inner captures.
+  - `{ ... }:name` — one-or-more repetition (same capture semantics, but fails if zero occurrences).
 
-```py
-@rule('<pair:first> [<COMMA> <pair:p>]:rest', name='object',
-      validate=lambda args: all(isinstance(k, str) for k, _ in ([args[0]] + args[1])),
-      transform=lambda args: args[0] if len(args) == 1 else args)
-def object_nonempty(self, first, rest):
-    ...
-```
+- **Group sugar for separators**: a common shorthand like `[',' <expr>] :rest` is recognized by the parser. If the inner sequence is exactly `SEP ITEM` and `ITEM` is capturable, `rest` becomes the list of ITEM captures while separators are ignored.
 
----
+- **Rule name on the left**: `"<rule> ::= ..."` — explicitly name the pattern's rule. This name takes precedence over decorator `name=` or function name heuristics.
 
-## Memoization
+- **Anonymous captures**: `@rule(..., capture_anon=True)` will capture unnamed references (those without `:var`) and provide them positionally to the semantic action. This affects inner groups and repetitions accordingly.
 
-The engine uses a conservative per-parse memo cache keyed by `(rule_name, position, min_prec)` to reduce repeated work. This speeds many grammars, but the cache is intentionally conservative to remain compatible with the left-recursive growth algorithm. You don’t need to enable anything - the `parse()` entrypoint initializes the cache automatically.
+- **Examples**:
+  - `@rule("<expr:x> [',' <expr:y>]:rest")` → `x` is the first expression, `rest` is a list of following expressions.
+  - `@rule("<id?:name='anon'>")` → `name` will either be the matched id or the default `'anon'`.
+  - `@rule("<num*:ns>")` → `ns` becomes a list of numbers (maybe empty).
+  - `@rule("<assignment> ::= <varname> '=' <expr>", capture_anon=True)` → the semantic function receives positional args for `varname` and `expr`.
 
 ---
 
-## Error messages
+## token() details and heuristics
 
-`ParseError` shows line, column, a snippet and caret. Newer messages include a short `Found: '...'` lookahead revealing what characters were present at the failure point and better "expected" hints for failed group/quantifier matches. This should make diagnosing syntax mistakes faster.
+`token(pattern, convert=None, with_word_boundaries=None, ignore_case=False, capture_by_default=False)` creates a lexical token.
+
+- When `with_word_boundaries` is omitted the library uses heuristics to decide whether to wrap the regex in `\b...\b`:
+  - If the pattern *starts* with an alphanumeric character it's likely a word-like token → wrap with `\b`.
+  - If the pattern looks purely punctuation/operator-like (after removing escape sequences) do **not** wrap.
+  - If the pattern contains alphabetic letters but doesn't start with alphanumeric (rare), be conservative and do not wrap.
+
+- `capture_by_default=True` causes an unnamed reference `<TOKEN>` (without `:var`) to still produce a capture. This is convenient for simple token rules like `COMMA = token(',', capture_by_default=True)` where you want separators to sometimes be captured by default.
+
+- `ignore_case=True` will compile the token regex case-insensitively.
+
+---
+
+## Gotchas — common mistakes and probably-wrong grammars
+
+This library is expressive, but several patterns commonly trip people up. Here are gotchas and tips to avoid surprises.
+
+1. **Relying on unnamed token captures accidentally.**
+   - If you set `capture_by_default=True` for a token, any unnamed reference to that token inside a named group may accidentally capture values into the group's list. The library emits a warning for this case — heed it.
+
+2. **Nested named captures inside a named group.**
+   - Writing `[ SEP <ITEM:name> ]:list` will create nested named captures (a group's named `:list` and the inner `<ITEM:name>`), which is usually not what you want. The linter will warn; prefer `[ SEP <ITEM> ]:list` and capture the inner item via `capture_by_default` on the token if needed, or remove the inner `:name` and handle naming at the group level.
+
+3. **Zero-length matches in repetition.**
+   - Be cautious when writing patterns or tokens that can match the empty string. Repetition constructs (`*`, `+`, group loops) will try to prevent infinite loops by checking for progress, but semantic behavior becomes confusing. Avoid zero-width tokens.
+
+4. **Mistaking literal quoting rules.**
+   - Single-quote doubling (`''`) is used, not backslash escapes. If you need backslashes in a literal, prefer double quotes.
+
+5. **Overly-complex transforms.**
+   - `transform` is a powerful hook but should stay simple (normalization / small pre-checks). Heavy logic or raising exceptions inside `transform` will be surfaced as parse errors with less obvious stack traces.
+
+6. **Expecting a missing `top` rule to work.**
+   - The engine requires a `top` rule to be defined (unless you explicitly supply `start_rule` to `parse`). Define `@rule("<your_start:res>") def top(self, res): ...` as the entry point.
+
+7. **Assuming left-recursive constructs are unlimited.**
+   - Left-recursive operator support is limited to operator-style growth that the engine's algorithm recognizes. Highly-ambiguous or unconstrained left recursion can still fail or be slow.
+
+8. **Confusing `capture_anon` and named args.**
+   - If you enable `capture_anon=True`, the function will receive positional arguments for unnamed refs. If the semantic function signature expects named keyword args, mismatch errors will happen; prefer explicit `:var` when in doubt.
+
+9. **Wrong use of defaults that aren't valid Python literals.**
+   - `<NAME?:v=foo>` will attempt to parse `foo` as a Python literal; if parsing fails the raw string `foo` will be used. Prefer quoted defaults when the default is a string: `<id?:name='anon'>`.
+
+---
+
+## Debugging tips
+
+- When a parse fails, read the `ParseError` — it shows line/column, code snippet, a caret and a short `Found:` preview of the input at the failure point.
+- Enable `warnings` in your test harness (`import warnings; warnings.simplefilter('always')`) to see pattern-linter messages while iterating on grammar design.
+- Keep semantic actions small during debugging — validate/transform hooks are useful to reject invalid choices close to the grammar and get clearer failures.
+
+---
+
+## Design notes & why some choices were made
+
+- The pattern DSL prioritizes readability and short grammars over full generality. It intentionally mixes lexical and grammar references inside the same notation for convenience.
+- The left-recursive growth algorithm is conservative and paired with per-parse memoization to avoid extremely subtle infinite-recursion bugs while still supporting usual expression grammars.
+- The library deliberately emits `UserWarning`s for fragile or ambiguous pattern constructs — early feedback beats silently wrong parsers.
+
+---
+
+## Contributing & examples
+
+This is an experimental library. If you copy it into a project and improve something, please add an `examples/` folder with small grammars (calculator, JSON, tiny-basic) so others can iterate.
