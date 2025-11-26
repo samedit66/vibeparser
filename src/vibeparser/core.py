@@ -286,15 +286,14 @@ class Grammar(ABC):
                             token_info = None
                             if sec_name in getattr(self, "_tokens", {}):
                                 token_info = self._tokens[sec_name]
+                            # consider token capturable if user named it, or if the token
+                            # looks like a word-like token (contains \w or alnum in regex),
+                            # or if the token explicitly has capture_by_default=True
+                            tok_pattern = token_info[0].pattern if token_info is not None else ""
+                            looks_wordlike = bool(re.search(r"\\w|[A-Za-z0-9]", tok_pattern))
                             sec_capturable = (sec_var is not None) or (
-                                token_info is not None and token_info[2]
+                                token_info is not None and (token_info[2] or looks_wordlike)
                             )
-                            first_is_sep = (first[0] == "lit") or (
-                                first[0] == "ref" and first[2] is None
-                            )
-                            if sec_capturable and first_is_sep:
-                                # Make sugar node: ('group_sugar', kind, sep_elem, item_elem, var)
-                                group_node = ("group_sugar", kind, first, second, var)
                     elems.append(group_node)
                     p = skip_spaces(p)
                     continue
@@ -615,29 +614,24 @@ class Grammar(ABC):
 
             elif typ == "ref":
                 name, var, quant, default = elem[1], elem[2], elem[3], elem[4]
-                # token
+                # ---- token case ----
                 if name in self._tokens:
                     regex, convert, tok_capture_by_default = self._tokens[name]
-                    # For tokens, we only capture when:
-                    #  - the ref has an explicit :var, OR
-                    #  - the token has capture_by_default True
-                    # We do NOT treat capture_anon as applying to tokens.
                     m = regex.match(text, cur)
                     if not m:
                         if quant == "optional":
                             if var:
-                                # use default if provided, else None
                                 val = default if default is not None else None
                                 return ([val], cur)
+                            elif capture_anon:
+                                # anonymous capture requested for optional token -> None
+                                return ([None], cur)
                             else:
-                                # token optional without var -> no capture, return same pos
                                 return ([], cur)
-                        # quant '*' (star) or '+' handled below with repetition loops
                         if quant in ("star", "plus"):
-                            # attempt repetition loop for tokens:
+                            # repetition for tokens:
                             items = []
                             curpos = cur
-                            # first required?
                             first = regex.match(text, curpos)
                             if not first:
                                 if quant == "plus":
@@ -645,11 +639,10 @@ class Grammar(ABC):
                                     return None
                                 else:
                                     # star, zero occurrences
-                                    if var:
+                                    if var or capture_anon:
                                         return ([[]], curpos)
                                     else:
                                         return ([], curpos)
-                            # else loop
                             while True:
                                 m2 = regex.match(text, curpos)
                                 if not m2:
@@ -657,10 +650,9 @@ class Grammar(ABC):
                                 raw = m2.group(0)
                                 curpos = m2.end()
                                 items.append(convert(raw) if convert else raw)
-                                # avoid infinite loops if zero-length matches
                                 if curpos == m2.start():
                                     break
-                            if var or tok_capture_by_default:
+                            if var or tok_capture_by_default or capture_anon:
                                 return ([items], curpos)
                             else:
                                 return ([], curpos)
@@ -670,7 +662,6 @@ class Grammar(ABC):
                     newcur = m.end()
                     val = convert(raw) if convert else raw
                     if quant in ("star", "plus"):
-                        # repetition for tokens
                         items = [val]
                         curpos = newcur
                         while True:
@@ -682,68 +673,15 @@ class Grammar(ABC):
                             items.append(convert(raw2) if convert else raw2)
                             if curpos == m2.start():
                                 break
-                        if var or tok_capture_by_default:
+                        if var or tok_capture_by_default or capture_anon:
                             return ([items], curpos)
                         else:
                             return ([], curpos)
-                    # optional handled earlier
-                    if var or tok_capture_by_default:
+                    # single token match: capture if explicit var, token default capture, or anonymous-capture requested
+                    if var or tok_capture_by_default or capture_anon:
                         return ([val], newcur)
                     else:
-                        # token matched but not requested to capture -> do not capture
                         return ([], newcur)
-                else:
-                    # rule reference
-                    # repetition quant handling
-                    if quant in ("star", "plus"):
-                        items = []
-                        curpos = cur
-                        first_attempt = True
-                        while True:
-                            try:
-                                val, new_pos = self._match_rule(
-                                    name, text, curpos, min_prec=0
-                                )
-                            except ParseError:
-                                val = None
-                                new_pos = None
-                            if val is None:
-                                if first_attempt and quant == "plus":
-                                    expected.append(f"one or more {elem_desc(elem)}")
-                                    return None
-                                break
-                            items.append(val)
-                            if new_pos is None or new_pos == curpos:
-                                # no progress -> break to avoid infinite loop
-                                break
-                            curpos = new_pos
-                            first_attempt = False
-                        if var:
-                            return ([items], curpos)
-                        elif capture_anon:
-                            return ([items], curpos)
-                        else:
-                            return ([], curpos)
-                    # ordinary single rule reference
-                    try:
-                        val, new_pos = self._match_rule(name, text, cur, min_prec=0)
-                    except ParseError:
-                        if quant == "optional":
-                            if var:
-                                val_default = default if default is not None else None
-                                return ([val_default], cur)
-                            elif capture_anon:
-                                return ([None], cur)
-                            else:
-                                return ([], cur)
-                        expected.append(f"<{name}>")
-                        return None
-                    if var:
-                        return ([val], new_pos)
-                    elif capture_anon:
-                        return ([val], new_pos)
-                    else:
-                        return ([], new_pos)
 
             elif typ == "group_sugar":
                 # sugar node: ('group_sugar', kind, sep_elem, item_elem, var)
