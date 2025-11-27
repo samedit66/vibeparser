@@ -1,8 +1,10 @@
 # vibeparser 😎🤙🏻🔥
 
 A tiny, pleasant-to-use **declarative** parsing mini-library with a compact pattern DSL, per-alternative precedence, limited left-recursive operator support, and convenient repetition/quantifier syntax.
-Goal: make it easy and pleasant to write small grammars in Python using a compact pattern DSL combined with Python semantic functions.
-Best for: education, experiments, quick prototypes, parsers for small config languages, calculators, tiny DSLs.
+
+**Goal**: make it easy and pleasant to write small grammars in Python using a compact pattern DSL combined with Python semantic functions.
+
+**Best for**: education, experiments, quick prototypes, parsers for small config languages, calculators, tiny DSLs.
 
 > [!WARNING]
 > **This library was entirely written by an LLM.** It *appears* to work and the examples run in my tests, but treat it as experimental research/learning code — not something to deploy in production. Use at your own risk; if it eats your grammar, try again with coffee ☕. (Also: it may be charmingly verbose about errors.)
